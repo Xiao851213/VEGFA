@@ -1,0 +1,162 @@
+library(Seurat)
+library(ggplot2)
+library(stringr)
+library(ggsci)
+library(org.Hs.eg.db)
+library(tidyverse)
+library(showtext)
+library(scales)
+library(reshape2)
+library(patchwork)
+library(pheatmap)
+library(DoubletFinder)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+library(REdaS)
+library(qdapTools)
+library(clusterProfiler)
+library(RCurl)
+library(stringr)
+library(XML)
+library(clustree)
+library(enrichplot)
+library(GOplot)
+library(DOSE)
+library(ggnewscale)
+library(topGO)
+library(circlize)
+library(ComplexHeatmap)
+library(msigdbr)
+library(GSVA)
+library(future)
+library(ggrepel)
+library(harmony)
+
+font_add('Arial','/Library/Fonts/Arial.ttf')
+showtext_auto()
+rm(list=ls())
+
+setwd("E:/Work01/HMI/Trajectory_new/wf/")
+sce <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sce.RDS")
+
+mycolor1<-pal_npg("nrc", alpha = 1)(10)
+mycolor2<-pal_aaas("default", alpha = 1)(10)
+mycolor3<-pal_nejm("default", alpha = 1)(8)
+mycolor4<-pal_lancet("lanonc", alpha = 1)(9)
+mycolor5<-pal_jama("default", alpha = 1)(7)
+mycolor6<-pal_jco("default", alpha = 1)(10)
+mycolor <-c(mycolor3,mycolor1,mycolor2,mycolor4,mycolor5,mycolor6)
+
+#cell chat
+library(uwot)
+library(CellChat)
+CellChatDB <- CellChatDB.human
+
+KS_cellchat <- function(x){
+             data.input <- GetAssayData(x, assay = "RNA", slot = "data")
+             identity <- subset(x@meta.data, select = "Pseudotime_state")
+             res <- createCellChat(object = data.input, meta = identity,  group.by = "Pseudotime_state") 
+             resDB.use <- subsetDB(CellChatDB, search = "Secreted Signaling")
+             res@DB <- resDB.use
+             res <- subsetData(res)
+             res <- identifyOverExpressedGenes(res)
+             res <- identifyOverExpressedInteractions(res)
+             res <- projectData(res, PPI.human)
+             res <- computeCommunProb(res, raw.use = TRUE)
+             res <- filterCommunication(res, min.cells = 3)
+             res <- computeCommunProbPathway(res)
+             res <- aggregateNet(res)
+             res  <- netAnalysis_computeCentrality(res, slot.name = "netP")
+             res <- computeNetSimilarity(res, type = "functional")
+             res <- netEmbedding(res, umap.method = 'uwot', type = "functional")
+             res <- netClustering(res, type = "functional",do.parallel = FALSE)
+             res <- computeNetSimilarity(res, type = "structural")
+             res <- netEmbedding(res, umap.method = 'uwot', type = "structural")
+             res <- netClustering(res, type = "structural",do.parallel = FALSE)
+             return(res)
+}
+
+cellchat <- KS_cellchat(sce)
+saveRDS(cellchat_res, file = "sce_wf_chat.rds") 
+cellchat  <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sce_wf_chat.rds")
+
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+
+mat <- cellchat@net$weight
+par(mfrow = c(3,4), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+gg1 <- netAnalysis_signalingRole_scatter(cellchat)
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# Signaling role analysis on the cell-cell communication networks of interest
+gg2 <- netAnalysis_signalingRole_scatter(cellchat, signaling = c("CXCL", "CCL"))
+#> Signaling role analysis on the cell-cell communication network from user's input
+gg1 + gg2
+
+ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing")
+ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming")
+ht1 + ht2
+
+selectK(cellchat, pattern = "incoming")
+nPatterns = 4 #dependent on the above result
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "incoming", k = nPatterns)
+# river plot
+netAnalysis_river(cellchat, pattern = "incoming")
+#> Please make sure you have load `library(ggalluvial)` when running this function
+
+# dot plot
+netAnalysis_dot(cellchat, pattern = "incoming")
+
+saveRDS(cellchat, file = "sce_wf_chat.rds")
+
+setwd("E:/Work01/HMI/Trajectory_new/wk/")
+sce <- readRDS("E:/Work01/HMI/Trajectory_new/wk/sce.RDS")
+cellchat <- KS_cellchat(sce)
+saveRDS(cellchat, file = "sce_wk_chat.rds") 
+#cellchat  <- readRDS("E:/Work01/HMI/Trajectory_new/wk/sce_wk_chat.rds")
+
+#require(ggplotify)
+#p1 <- as.ggplot(p1)
+#p2 <- p1+ggtitle('SEMA3')
+#p2
+
+pathways.show <- c("SEMA3")
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+#chat_circle_SEMA3
+pathways.show <- c("PERIOSTIN")
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle") 
+#chat_circle_PERIOSTIN
+pathways.show <- c("PDGF")
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle") 
+#chat_circle_PDGF
+pathways.show <- c("VISFATIN")
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle") 
+#chat_circle_VISFASTIN
+
+# Circle plot
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+# Chord diagram
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "chord")
+#> Note: The first link end is drawn out of sector 'Inflam. FIB'.
+# Hierarchy plot
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "hierarchy")
+# Hierarchy plot
+par(mfrow=c(1,1))
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "spatial")
