@@ -1,0 +1,744 @@
+library(Seurat)
+library(ggplot2)
+library(stringr)
+library(org.Hs.eg.db)
+library(tidyverse)
+library(scales)
+library(reshape2)
+library(patchwork)
+library(pheatmap)
+library(DoubletFinder)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+library(REdaS)
+library(qdapTools)
+library(clusterProfiler)
+library(harmony)
+library(RCurl)
+library(stringr)
+library(XML)
+library(clustree)
+library(enrichplot)
+library(GOplot)
+library(DOSE)
+library(ggnewscale)
+library(topGO)
+library(circlize)
+library(ComplexHeatmap)
+library(msigdbr)
+library(GSVA)
+library(paletteer)
+library(magrittr)
+library(ggsci)
+library(showtext)
+library(ggrepel)
+
+font_add('Arial','/Library/Fonts/Arial.ttf')
+showtext_auto()
+
+
+setwd("E:/Work01/HMI/")
+
+sma <- readRDS("E:/BaiduNetdiskDownload/All-snRNA-Spatial multi-omic map of human myocardial infarction.RDS")
+
+#gene ID translation
+ids = mapIds(org.Hs.eg.db, keys =rownames(sma),   column = 'SYMBOL',keytype = 'ENSEMBL')
+ids <- as.data.frame(ids)
+ids$SYMBOL <-ids$ids
+ids$ENSEMBL <- rownames(ids)
+ids=na.omit(ids)
+ids=ids[!duplicated(ids$SYMBOL),]
+ids=ids[!duplicated(ids$ENSEMBL),]
+pos=match(ids$ENSEMBL,rownames(sma) )
+sma=sma[pos,]
+#write a function
+RenameGenesSeurat <- function(obj , 
+                              newnames ) { 
+  # Replace gene names in different slots of a Seurat object. Run this before integration. Run this before integration. 
+  # It only changes obj@assays$RNA@counts, @data and @scale.data.
+  print("Run this before integration. It only changes obj@assays$RNA@counts, @data and @scale.data.")
+  RNA <- obj@assays$RNA
+  if (nrow(RNA) == length(newnames)) {
+    if (length(RNA@counts)) RNA@counts@Dimnames[[1]]            <- newnames
+    if (length(RNA@data)) RNA@data@Dimnames[[1]]                <- newnames
+    if (length(RNA@scale.data)) RNA@scale.data@Dimnames[[1]]    <- newnames
+  } else {"Unequal gene sets: nrow(RNA) != nrow(newnames)"}
+  obj@assays$RNA <- RNA
+  return(obj)
+}
+obj=RenameGenesSeurat(obj = sma, 
+                  newnames = ids$SYMBOL)
+sma <-obj
+head(rownames(sma))
+Idents(sma) <- sma@meta.data$cell_type_original
+
+
+meta.sma <- sma@meta.data
+meta.sma$group <- 'DN'
+expr <-sma@assays$RNA
+gene_expression <-expr@data %>% .['FLT1',] %>% as.data.frame() 
+colnames(gene_expression) <- 'FLT1'
+meta.sma$FLT1 <- gene_expression$FLT1
+expr <-sma@assays$RNA
+gene_expression <-expr@data %>% .['KDR',] %>% as.data.frame()
+colnames(gene_expression) <- 'KDR'
+meta.sma$KDR <- gene_expression$KDR
+meta.sma$group[which(meta.sma$KDR>0)] <- "KDR+"
+meta.sma$group[which(meta.sma$FLT1>0)] <- "FLT1+"
+meta.sma$group[which(meta.sma$KDR>0 & meta.sma$FLT1>0)] <- "DP"
+table(meta.sma$group)
+sma@meta.data  <- meta.sma
+saveRDS(sma, file = "sma.RDS")
+
+
+sma.list.celltype <- SplitObject(sma, split.by = "cell_type_original")
+sma_objs_celltype <- list()
+for (i in seq_along(sma.list.celltype)) {     
+     current_list <- names(sma.list.celltype)[i]     
+     current_data <- sma.list.celltype[[current_list]]
+     current_data[["RNA"]]@meta.features <- data.frame(row.names = rownames(current_data[["RNA"]]))         
+     all.genes <- rownames(current_data)
+     current_data <- FindVariableFeatures(current_data, selection.method = "vst", nfeatures = 3000)
+     current_data <- ScaleData(current_data, features = all.genes)
+     current_data <- RunPCA(current_data)
+     current_data <- RunHarmony(current_data,plot_convergence = TRUE, lambda = 0.5,group.by.vars = 'sample')
+     current_data <- FindNeighbors(current_data, reduction = "harmony", dims = 1:30)
+     current_data <- FindClusters(current_data, resolution = 0.1)
+     current_data <- RunUMAP(current_data, reduction = "harmony", dims = 1:30)
+sma_objs_celltype[[current_list]] <- current_data
+ }
+
+sma_Adipocyte <- sma_objs_celltype$Adipocyte
+sma_Cardiomyocyte <- sma_objs_celltype$Cardiomyocyte
+sma_Endothelial <- sma_objs_celltype$Endothelial
+sma_Fibroblast <- sma_objs_celltype$Fibroblast
+sma_Lymphoid <- sma.list.celltype$Lymphoid
+sma_Mesothelial <- sma_objs_celltype$Mesothelial
+sma_Myeloid <- sma.list.celltype$Myeloid
+sma_Pericyte_SMC <- sma_objs_celltype$Pericyte_SMC
+sma_Neuronal <- sma_objs_celltype$Neuronal
+
+saveRDS(sma_Adipocyte, file = "sma_Adipocyte.RDS")
+saveRDS(sma_Cardiomyocyte, file = "sma_Cardiomyocyte.RDS")
+saveRDS(sma_Endothelial, file = "sma_Endothelial.RDS")
+saveRDS(sma_Fibroblast, file = "sma_Fibroblast.RDS")
+saveRDS(sma_Lymphoid, file = "sma_Lymphoid.RDS")
+saveRDS(sma_Mesothelial, file = "sma_Mesothelial.RDS")
+saveRDS(sma_Myeloid, file = "sma_Myeloid.RDS")
+saveRDS(sma_Pericyte_SMC, file = "sma_Pericyte_SMC.RDS")
+saveRDS(sma_Neuronal, file = "sma_Neuronal.RDS")
+
+
+setwd("E:/Work01/HMI/Total/")
+sma_w <- subset(sma, WT1 >0)
+sma_wf <- subset(sma_w, FLT1 >0)
+sma_wk <- subset(sma_w, KDR >0)
+saveRDS(sma_wk, file = "sma_wk.RDS")
+saveRDS(sma_wf, file = "sma_wf.RDS")
+
+
+
+#Figure 1
+mycolor <- c("#4063a3", "#34b6c6", "#ddc000", "#EE4C97FF")
+sce <- sma
+#pie
+p1 <- table(sce@meta.data$group)
+p1 <- as.data.frame(p1)
+p1 <- p1[which(p1$Freq>0),]
+p1$prop <- 100*p1$Freq/sum(p1$Freq)
+p1$prop <- round(p1$prop, 2)
+
+p1$type <- paste(p1$Var1,'(',p1$prop,'%)')
+p2 <- ggplot(data = p1, aes(x = 1, 
+                                y = prop)) +
+  geom_col(color = "white", width = 1, aes(fill = type)) +
+  theme(panel.grid.major = element_blank(), #????
+        panel.grid.minor = element_blank(), #????
+        panel.border = element_blank(), #??
+        axis.title = element_blank(),  #???
+        axis.text = element_blank(), # ??
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill = 'white'), #???
+        plot.background=element_rect(fill="white"))+
+  xlim(-0.5, 1.5) +
+  scale_fill_manual(values = mycolor) +
+  ggtitle('Total nucleus = 191,795') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_polar(theta = "y") 
+ggsave(plot=p2, filename="sma_pie_circle_vegfr.pdf",width = 5.5, height = 4)
+
+
+vegfr <- c('FLT1', 'KDR')
+p1 <- DotPlot(sma, features = vegfr, group.by = 'major_labl')+ RotatedAxis()
+p2 <- DotPlot(sma, features = vegfr, group.by = 'cell_type_original')+ RotatedAxis()
+p3 <- p1 + p2 
+p3
+ggsave("sma_vegfra_dot.pdf",p3,width = 8,height = 4)
+ggsave("sma_vegfra_dot_zone.pdf",p1,width = 3.5,height = 4)
+ggsave("sma_vegfra_dot_type.pdf",p2,width = 4.5,height = 4)
+
+
+plotC <- table(sma@meta.data$group, sma@meta.data$major_labl) %>% melt()
+write.csv(plotC,file = 'sma_propotion_cell_type_group.csv')
+colnames(plotC) <- c("Group", "Region","Number")
+#colomplot
+pC1 <- ggplot(data = plotC, aes(x = Region, y = Number, fill = Group)) +
+geom_bar(stat = "identity", width=0.8,aes(group=Group),position="stack")+
+scale_fill_manual(values=mycolor) +
+theme_bw()+
+theme(panel.grid =element_blank()) +
+labs(x="",y="Average number")+
+theme(axis.text = element_text(size=12, colour = "black"))+
+theme(axis.title.y = element_text(size=12, colour = "black"))+
+theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black"))+
+theme(axis.text.x = element_text(angle = 45,hjust = 0.8, vjust = 0.6))
+#ratioplot
+pC2 <- ggplot(data = plotC, aes(x = Region, y = Number, fill = Group)) +
+geom_bar(stat = "identity", width=0.8,aes(group=Group),position="fill")+
+scale_fill_manual(values=mycolor) +
+theme_bw()+
+theme(panel.grid =element_blank()) +
+labs(x="",y="Cell proportion")+
+scale_y_continuous(labels = percent)+ ####move y axi
+theme(axis.text = element_text(size=12, colour = "black"))+
+theme(axis.title.y = element_text(size=12, colour = "black"))+
+theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black"))+
+theme(axis.text.x = element_text(angle = 45,hjust = 0.8, vjust = 0.6))#?????????45?
+#bind two plot
+pC <- pC1 + pC2 + plot_layout(ncol = 2, widths = c(1,1),guides = 'collect')
+#save plot
+ggsave(pC,file="sma_Propotion_Group_Region.pdf",width = 6, height = 4)
+
+plotC <- table(sma@meta.data$group, sma@meta.data$cell_type_original) %>% melt()
+write.csv(plotC,file = 'sma_propotion_cell_type_group.csv')
+colnames(plotC) <- c("Group", "Cell_Type","Number")
+#colomplot
+pC1 <- ggplot(data = plotC, aes(x = Cell_Type, y = Number, fill = Group)) +
+geom_bar(stat = "identity", width=0.8,aes(group=Group),position="stack")+
+scale_fill_manual(values=mycolor) +
+theme_bw()+
+theme(panel.grid =element_blank()) +
+labs(x="",y="Average number")+
+theme(axis.text = element_text(size=12, colour = "black"))+
+theme(axis.title.y = element_text(size=12, colour = "black"))+
+theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black"))+
+theme(axis.text.x = element_text(angle = 45,hjust = 0.8, vjust = 0.6))
+#ratioplot
+pC2 <- ggplot(data = plotC, aes(x = Cell_Type, y = Number, fill = Group)) +
+geom_bar(stat = "identity", width=0.8,aes(group=Group),position="fill")+
+scale_fill_manual(values=mycolor) +
+theme_bw()+
+theme(panel.grid =element_blank()) +
+labs(x="",y="Cell proportion")+
+scale_y_continuous(labels = percent)+ ####move y axi
+theme(axis.text = element_text(size=12, colour = "black"))+
+theme(axis.title.y = element_text(size=12, colour = "black"))+
+theme(panel.border = element_rect(size = 1, linetype = "solid", colour = "black"))+
+theme(axis.text.x = element_text(angle = 45,hjust = 0.8, vjust = 0.6))#?????????45?
+#bind two plot
+pC <- pC1 + pC2 + plot_layout(ncol = 2, widths = c(1,1),guides = 'collect')
+#save plot
+ggsave(pC,file="sma_Propotion_Group_Celltype.pdf",width = 10, height = 4)
+
+
+mycolor <-c(mycolor3,mycolor1,mycolor2,mycolor4,mycolor5,mycolor6)
+p4 <- DimPlot(sma, reduction = "umap", cols = mycolor, group.by = "cell_type_original", split.by = "group",ncol = 2, raster=FALSE)
+p4
+ggsave(p4,file="sma.vegfr_umap_split_group.pdf",width = 10, height = 8)
+
+p1 <- DotPlot(sma_Cardiomyocyte, features = vegfr, group.by = 'major_labl')+ RotatedAxis() + ggtitle('Cardiomyocyte')
+p2 <- DotPlot(sma_Endothelial, features = vegfr, group.by = 'major_labl')+ RotatedAxis() + ggtitle('Endothelial')
+p3 <- p1 / p2 
+ggsave("sma_vegfra_dot_ECCM_region.pdf",p3,width = 4,height = 8)
+
+
+#Figure 2
+deg <- c(
+'WT1'
+)
+p1 <- DotPlot(sma, features = deg, group.by = 'group') + RotatedAxis() 
+p1
+p2 <- DotPlot(sma, features = deg, group.by = 'major_labl') + RotatedAxis() 
+p2
+p3 <- DotPlot(sma, features = deg, group.by = 'cell_type_original') + RotatedAxis()  
+p3
+p4 <- p1 + p2 +p3
+p4
+ggsave(p4,file="sma_dot_wt1.pdf",width = 11, height = 4)
+
+
+sma_w <- subset(sma, WT1 >0)
+p <- VlnPlot(subset(sma_w, WT1 >0), features = 'KDR', pt.size=0.1, cols = mycolor, group.by = 'cell_type_original', split.by = 'group', raster = FALSE)
+p1 <- p + ggtitle('KDR in WT1+ cells')
+ggsave(p1,file="sma_wk_vln_cell_state.pdf", width = 10, height = 4)
+p <- VlnPlot(subset(sma_w, WT1 >0), features = 'FLT1', pt.size=0.1, cols = mycolor, group.by = 'cell_type_original', split.by = 'group', raster = FALSE)
+p1 <- p + ggtitle('FLT1 in WT1+ cells')
+ggsave(p1,file="sma_wf_vln_cell_state.pdf", width = 10, height = 4)
+
+
+canonical.marker <- c( 
+                   'MYH7', 'TTN', 'RYR2','TNNT2', #ventricle Cardiomyocyte
+                   'VWF', 'PECAM1', 'CDH5', 'WT1')  #Endothelial
+
+p1 <- DotPlot(sma_Cardiomyocyte, features = canonical.marker, group.by = 'group') + coord_flip()+ RotatedAxis()+ ggtitle('Cardiomyocyte')
+p2 <- DotPlot(sma_Endothelial, features = canonical.marker, group.by = 'group') + coord_flip()+ RotatedAxis()+ ggtitle('Endothelial')
+p3 <- p1 + p2 
+ggsave("sma_vegfra_dot_canonical.marker.pdf",p3,width = 10,height = 4)
+
+p1 <- VlnPlot(sma_Cardiomyocyte, features = canonical.marker, group.by = 'group', ncol = 4, cols = mycolor)+ RotatedAxis() 
+p2 <- VlnPlot(sma_Endothelial, features = canonical.marker, group.by = 'group', ncol = 4, cols = mycolor)+ RotatedAxis() 
+ggsave("sma_vegfra_vln_canonical.marker_cm.pdf",p1,width = 10,height = 8)
+ggsave("sma_vegfra_vln_canonical.marker_ec.pdf",p2,width = 10,height = 8)
+
+
+
+#Figure 3
+sma_w <- subset(sma, WT1 >0)
+sma_wf <- subset(sma_w, FLT1 >0)
+sma_wk <- subset(sma_w, KDR >0)
+
+setwd("E:/Work01/HMI/Trajectory_new/wk/")
+sce <- sma_wk
+sce[["RNA"]]@meta.features <- data.frame(row.names = rownames(sce[["RNA"]]))         
+all.genes <- rownames(sce)
+sce <- FindVariableFeatures(sce, selection.method = "vst", nfeatures = 3000)
+sce <- ScaleData(sce, features = all.genes)
+sce <- RunPCA(sce)
+sce <- RunHarmony(sce,plot_convergence = TRUE, lambda = 0.5,group.by.vars = 'sample')
+sce <- FindNeighbors(sce, reduction = "harmony", dims = 1:30)
+sce <- FindClusters(sce, resolution = 0.1)
+sce <- RunUMAP(sce, reduction = "harmony", dims = 1:30)
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by = 'major_labl', pt.size = 1, label = F, raster=FALSE)
+ggsave(p1, file='hMI_umap_group_wk.pdf', width = 5, height = 4)
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by =  'cell_type_original', pt.size = 1, label = F, raster=FALSE)
+ggsave(p1, file='hMI_umap_type_wk.pdf', width = 5.5, height = 4)
+
+seq <- seq(0, 1, by = 0.1)
+for(res in seq){
+  sce <- FindClusters(object = sce, method = "igraph",resolution = res)
+}
+sce_clustree <- clustree(sce, prefix = 'RNA_snn_res.') + coord_flip()
+sce_clustree
+ggsave(sce_clustree,file="sce_clustree.pdf",width = 15, height = 10)
+
+sce <- FindClusters(sce, resolution = 0.1)
+
+metadata <- sce@meta.data
+metadata$cell_state <- 'NA'
+metadata$cell_state[which(metadata$seurat_clusters == 0)] = "wkc01"
+metadata$cell_state[which(metadata$seurat_clusters == 1)] = "wkc02"
+metadata$cell_state[which(metadata$seurat_clusters == 2)] = "wkc03" 
+sce@meta.data <- metadata
+Idents(sce) <- sce@meta.data$cell_state
+my_levels <- c( 'wkc01', 'wkc02', 'wkc03' )
+Idents(sce) <- factor(Idents(sce), levels = my_levels)
+DimPlot(sce, reduction = "umap", cols = mycolor, label = TRUE, raster=FALSE)
+
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by = 'cell_state', pt.size = 0.5, label = T, raster=FALSE)
+ggsave(p1, file='hMI_umap_state_wk.pdf', width = 5, height = 4)
+saveRDS(sce, file = "sma_wk.RDS")
+
+
+library(monocle)
+expr_matrix <-as(as.matrix(sce@assays$RNA@counts), 'sparseMatrix')
+p_data <- sce@meta.data
+p_data$cell_type <- sce@active.ident
+f_data <- data.frame(gene_short_name = rownames(sce), row.names = row.names(sce))
+pd <- new("AnnotatedDataFrame", data = p_data)
+fd <- new("AnnotatedDataFrame", data = f_data)
+cds <- newCellDataSet(expr_matrix,
+                  phenoData = pd,
+                  featureData = fd,
+                  lowerDetectionLimit = 0.5,
+                  expressionFamily = negbinomial.size())
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+express_genes <- VariableFeatures(sce)
+cds <- setOrderingFilter(cds, express_genes)
+diff <- differentialGeneTest(cds[express_genes,], fullModelFormulaStr = '~cell_type', cores = 1)
+deg <- subset(diff, qval < 0.01)
+deg <- deg[order(deg$qval, decreasing = F),]
+write.table(deg,file = 'sce_monocle2.DEG.xls', col.names = T, row.names = F, quote = F)
+ordergene <- rownames(deg)[order(deg$qval)][1:400]
+cds <- setOrderingFilter(cds, ordergene)
+cds <- reduceDimension(cds, max_components = 2, method = "DDRTree")
+cds <- orderCells(cds)
+#cds <- orderCells(cds, root_state = 8)
+saveRDS(cds, file='sce_cds_m2.rds')
+#cds <- readRDS("E:/Work01/HMI/Trajectory_new/wk/sce_cds_m2.RDS")
+p1 <- plot_cell_trajectory(cds, color_by = 'Pseudotime', cell_size = 1.5, state_number_size = 4, show_backbone = TRUE)
+ggsave(p1, file='sce.pseudotime.pdf', width = 4, height = 3.2)
+p1 <- plot_cell_trajectory(cds, color_by = 'State', cell_size = 1.5, show_backbone = TRUE)+ scale_color_manual(values = c(mycolor2,mycolor3)) 
+ggsave(p1, file='sce_cell_trajectory_state.pdf', width = 5, height = 4)
+
+p1 <- plot_cell_trajectory(cds, color_by = 'cell_state', cell_size = 1.5, state_number_size = 8, show_backbone = TRUE)+ scale_color_manual(values = mycolor) 
+ggsave(p1, file='sce_cell_trajectory_cellstate.pdf', width = 5, height = 4)
+
+p1 <- plot_cell_trajectory(cds, color_by = 'cell_type_original', cell_size = 1.5, show_backbone = TRUE)+ facet_wrap('~major_labl', nrow = 2) +scale_color_manual(values = mycolor1) 
+ggsave(p1, file='sce_cell_trajectory_type_group_split.pdf', width = 7.5, height = 4.5)
+
+
+pdata <- Biobase::pData(cds)
+metadata <- pdata
+metadata$Pseudotime_state <- 'NA'
+metadata$Pseudotime_state[which(metadata$State == 1)] = "Pstate1"
+metadata$Pseudotime_state[which(metadata$State == 2)] = "Pstate2"
+metadata$Pseudotime_state[which(metadata$State == 3)] = "Pstate3"
+metadata$Pseudotime_state[which(metadata$State == 4)] = "Pstate4"
+metadata$Pseudotime_state[which(metadata$State == 5)] = "Pstate5" 
+metadata$Pseudotime_state[which(metadata$State == 6)] = "Pstate6" 
+metadata$Pseudotime_state[which(metadata$State == 7)] = "Pstate7"  
+metadata$Pseudotime_state[which(metadata$State == 8)] = "Pstate8"
+metadata$Pseudotime_state[which(metadata$State == 9)] = "Pstate9"
+sce@meta.data <- metadata
+saveRDS(sce, file = "sce.RDS")
+#sce <- readRDS("E:/Work01/HMI/Trajectory_new/wk/sce.RDS")
+
+
+library(CytoTRACE)
+data = sce@reductions$umap@cell.embeddings %>% as.data.frame() %>% cbind(cell_type = sce@meta.data$Pseudotime_state)
+colnames(data) <- c('umap_1', 'umap_2', 'Pseudotime_state')
+expr_matrix <-as.matrix(sce@assays$RNA@counts)
+meta <- sce@meta.data
+t <- meta$Pseudotime_state
+t.name <- rownames(meta)
+names(t) <- t.name
+cyto.ob <- as.matrix(expr_matrix)
+results <- CytoTRACE(cyto.ob)
+plotCytoTRACE(results)
+plotCytoTRACE(results, phenotype = t, emb = data)
+plotCytoGenes(results, numOfGenes = 10)
+
+#pseudotime significant genes
+Time_diff <- differentialGeneTest(cds[ordergene,], cores = 1,
+fullModelFormulaStr = "~sm.ns(Pseudotime)")
+Time_diff <- Time_diff[,c(5,2,3,4,1,6)] #把gene放前面，也可以不改
+write.csv(Time_diff, "sce_Time_diff_all.csv", row.names = F)
+#Time_diff <- read.csv("E:/Work01/HMI/Trajectory_new/wk/sce_Time_diff_all.csv")
+Time_genes <- Time_diff %>% pull(gene_short_name) %>% as.character()
+p=plot_pseudotime_heatmap(cds[Time_genes,], num_clusters=4, show_rownames=F, return_heatmap=T)
+ggsave("sce_Time_heatmapAll.pdf", p, width = 5, height = 16)
+
+Time_diff_genes <- top_n(Time_diff, n = 10, desc(qval)) %>% pull(gene_short_name)
+p1 <- plot_genes_in_pseudotime(cds[Time_diff_genes,], ncol=5, color_by = 'State')+ scale_color_manual(values = mycolor2) 
+ggsave("sce_Time_diff_genes.pdf", p1, width = 12.5, height = 3)
+
+
+p$tree_row
+clusters <- cutree(p$tree_row, k = 4)
+clustering <- data.frame(clusters)
+clustering[,1] <- as.character(clustering[,1])
+colnames(clustering) <- "Gene_Clusters"
+table(clustering)
+clustering$gene_short_name <- rownames(clustering)
+write.csv(clustering, "Time_clustering_all.csv", row.names = F)
+Time_diff_cluster <- merge(Time_diff, clustering, by = 'gene_short_name')
+write.csv(Time_diff_cluster, "sce_Time_diff_cluster.csv", row.names = F)
+
+cluster1 <- subset(clustering, Gene_Clusters=='1')
+cluster2 <- subset(clustering, Gene_Clusters=='2')
+cluster3 <- subset(clustering, Gene_Clusters=='3')
+cluster4 <- subset(clustering, Gene_Clusters=='4')
+
+
+KEGG_database <- 'hsa'
+SYMBOL <- cluster1$gene
+#SYMBOL <- cluster2$gene
+#SYMBOL <- cluster3$gene
+#SYMBOL <- cluster4$gene
+gene.df <- bitr(SYMBOL, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+gene <- gene.df$ENTREZID
+GO <- enrichGO(gene = gene,
+                   OrgDb=org.Hs.eg.db,
+                   keyType = "ENTREZID",
+                   ont = "BP",
+                   pAdjustMethod = "BH",
+                   minGSSize = 1,
+                   pvalueCutoff = 0.01,
+                   qvalueCutoff = 0.05,
+                   readable = TRUE)                 
+GO_dot <- dotplot(GO, label_format=40)
+GO_dot
+GO_cnet <- enrichplot::cnetplot(GO,circular=FALSE,colorEdge = TRUE)
+GO_cnet
+KEGG<-enrichKEGG(gene,
+                 keyType = 'kegg',
+                 organism = KEGG_database,
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05)
+KEGG_dot <- dotplot(KEGG,  label_format=40)
+KEGG_dot
+KEGG_cnet <- enrichplot::cnetplot(KEGG,circular=FALSE,colorEdge = TRUE)
+KEGG_cnet
+ggsave(GO_dot,file="sce_wk_cluster1_GO.pdf",width = 7.5, height = 4)
+ggsave(GO_cnet,file="sce_wk_cluster1_GO_cnet.pdf",width = 12, height = 10)
+ggsave(KEGG_dot,file="sce_wk_cluster1_KEGG.pdf",width = 7.5, height = 4)
+ggsave(KEGG_cnet,file="sce_wk_cluster1_KEGG_cnet.pdf",width = 12, height = 10)
+
+
+
+#Figure 4e
+library(MetBrewer)
+new_colors1 <- paste0(met.brewer("Monet"))
+p1 <- DimPlot(sce, reduction = "umap", cols = new_colors1, group.by = 'Pseudotime_state', pt.size = 1, label = F, raster=FALSE)
+ggsave(p1, file='hMI_umap_wk_Pseudotime_state.pdf', width = 5, height = 4)
+
+
+#Figure 5
+
+setwd("E:/Work01/HMI/Trajectory_new/wf/")
+sce <- sma_wf
+sce[["RNA"]]@meta.features <- data.frame(row.names = rownames(sce[["RNA"]]))         
+all.genes <- rownames(sce)
+sce <- FindVariableFeatures(sce, selection.method = "vst", nfeatures = 3000)
+sce <- ScaleData(sce, features = all.genes)
+sce <- RunPCA(sce)
+sce <- RunHarmony(sce,plot_convergence = TRUE, lambda = 0.5,group.by.vars = 'sample')
+sce <- FindNeighbors(sce, reduction = "harmony", dims = 1:30)
+sce <- FindClusters(sce, resolution = 0.1)
+sce <- RunUMAP(sce, reduction = "harmony", dims = 1:30)
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by = 'major_labl', pt.size = 1, label = F, raster=FALSE)
+ggsave(p1, file='hMI_umap_group_wf.pdf', width = 5, height = 4)
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by =  'cell_type_original', pt.size = 1, label = F, raster=FALSE)
+ggsave(p1, file='hMI_umap_type_wf.pdf', width = 5.5, height = 4)
+
+seq <- seq(0, 1, by = 0.1)
+for(res in seq){
+  sce <- FindClusters(object = sce, method = "igraph",resolution = res)
+}
+sce_clustree <- clustree(sce, prefix = 'RNA_snn_res.') + coord_flip()
+sce_clustree
+ggsave(sce_clustree,file="sce_clustree.pdf",width = 15, height = 10)
+
+sce <- FindClusters(sce, resolution = 0.1)
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by = 'seurat_clusters', pt.size = 0.5, label = T, raster=FALSE)
+ggsave(p1, file='hMI_umap_cluster_wf.pdf', width = 5, height = 4)
+
+metadata <- sce@meta.data
+metadata$cell_state <- 'NA'
+metadata$cell_state[which(metadata$seurat_clusters == 0)] = "wfc01"
+metadata$cell_state[which(metadata$seurat_clusters == 1)] = "wfc02"
+metadata$cell_state[which(metadata$seurat_clusters == 2)] = "wfc03" 
+metadata$cell_state[which(metadata$seurat_clusters == 3)] = "wfc04" 
+metadata$cell_state[which(metadata$seurat_clusters == 4)] = "wfc05" 
+sce@meta.data <- metadata
+Idents(sce) <- sce@meta.data$cell_state
+my_levels <- c( 'wfc01', 'wfc02', 'wfc03', 'wfc04', 'wfc05' )
+Idents(sce) <- factor(Idents(sce), levels = my_levels)
+DimPlot(sce, reduction = "umap", cols = mycolor, label = TRUE, raster=FALSE)
+
+p1 <- DimPlot(sce, reduction = "umap", cols = mycolor, group.by = 'cell_state', pt.size = 0.5, label = T, raster=FALSE)
+ggsave(p1, file='hMI_umap_wfc_state.pdf', width = 5, height = 4)
+saveRDS(sce, file = "sma_wf.RDS")
+
+
+library(monocle)
+expr_matrix <-as(as.matrix(sce@assays$RNA@counts), 'sparseMatrix')
+p_data <- sce@meta.data
+p_data$cell_type <- sce@active.ident
+f_data <- data.frame(gene_short_name = rownames(sce), row.names = row.names(sce))
+pd <- new("AnnotatedDataFrame", data = p_data)
+fd <- new("AnnotatedDataFrame", data = f_data)
+cds <- newCellDataSet(expr_matrix,
+                  phenoData = pd,
+                  featureData = fd,
+                  lowerDetectionLimit = 0.5,
+                  expressionFamily = negbinomial.size())
+cds <- estimateSizeFactors(cds)
+cds <- estimateDispersions(cds)
+express_genes <- VariableFeatures(sce)
+cds <- setOrderingFilter(cds, express_genes)
+diff <- differentialGeneTest(cds[express_genes,], fullModelFormulaStr = '~cell_type', cores = 1)
+deg <- subset(diff, qval < 0.01)
+deg <- deg[order(deg$qval, decreasing = F),]
+write.table(deg,file = 'sce_monocle2.DEG.xls', col.names = T, row.names = F, quote = F)
+ordergene <- rownames(deg)[order(deg$qval)][1:400]
+cds <- setOrderingFilter(cds, ordergene)
+cds <- reduceDimension(cds, max_components = 2, method = "DDRTree")
+cds <- orderCells(cds ) 
+#cds <- orderCells(cds, root_state = 5) 
+saveRDS(cds, file='sce_cds_m2.rds')
+#cds <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sce_cds_m2.RDS")
+p1 <- plot_cell_trajectory(cds, color_by = 'Pseudotime', cell_size = 1.5, state_number_size = 4, show_backbone = TRUE)
+ggsave(p1, file='sce.pseudotime.pdf', width = 4, height = 3.2)
+p1 <- plot_cell_trajectory(cds, color_by = 'State', cell_size = 1.5, show_backbone = TRUE)+ scale_color_manual(values = c(mycolor2,mycolor3)) 
+ggsave(p1, file='sce_cell_trajectory_state.pdf', width = 5, height = 4)
+p1 <- plot_cell_trajectory(cds, color_by = 'cell_state', cell_size = 1.5, state_number_size = 8, show_backbone = TRUE)+ scale_color_manual(values = mycolor) 
+ggsave(p1, file='sce_cell_trajectory_cellstate.pdf', width = 5, height = 4)
+
+
+p1 <- plot_cell_trajectory(cds, color_by = 'cell_type_original', cell_size = 1.5, show_backbone = TRUE)+ facet_wrap('~major_labl', nrow = 2) +scale_color_manual(values = mycolor1) 
+ggsave(p1, file='sce_cell_trajectory_type_group_split.pdf', width = 7.5, height = 4.5)
+
+
+pdata <- Biobase::pData(cds)
+metadata <- pdata
+metadata$Pseudotime_state <- 'NA'
+metadata$Pseudotime_state[which(metadata$State == 1)] = "Pstate1"
+metadata$Pseudotime_state[which(metadata$State == 2)] = "Pstate2"
+metadata$Pseudotime_state[which(metadata$State == 3)] = "Pstate3"
+metadata$Pseudotime_state[which(metadata$State == 4)] = "Pstate4"
+metadata$Pseudotime_state[which(metadata$State == 5)] = "Pstate5" 
+metadata$Pseudotime_state[which(metadata$State == 6)] = "Pstate6" 
+metadata$Pseudotime_state[which(metadata$State == 7)] = "Pstate7"   
+sce@meta.data <- metadata
+saveRDS(sce, file = "sce.RDS")
+#sce <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sce.RDS")
+
+library(CytoTRACE)
+data = sce@reductions$umap@cell.embeddings %>% as.data.frame() %>% cbind(cell_type = sce@meta.data$Pseudotime_state)
+colnames(data) <- c('umap_1', 'umap_2', 'Pseudotime_state')
+expr_matrix <-as.matrix(sce@assays$RNA@counts)
+meta <- sce@meta.data
+t <- meta$Pseudotime_state
+t.name <- rownames(meta)
+names(t) <- t.name
+cyto.ob <- as.matrix(expr_matrix)
+results <- CytoTRACE(cyto.ob)
+plotCytoTRACE(results)
+plotCytoTRACE(results, phenotype = t, emb = data)
+plotCytoGenes(results, numOfGenes = 10)
+
+
+#pseudotime significant genes
+Time_diff <- differentialGeneTest(cds[ordergene,], cores = 1,
+fullModelFormulaStr = "~sm.ns(Pseudotime)")
+Time_diff <- Time_diff[,c(5,2,3,4,1,6)] 
+write.csv(Time_diff, "sce_Time_diff_all.csv", row.names = F)
+Time_genes <- Time_diff %>% pull(gene_short_name) %>% as.character()
+p=plot_pseudotime_heatmap(cds[Time_genes,], num_clusters=4, show_rownames=F, return_heatmap=T)
+ggsave("sce_Time_heatmapAll.pdf", p, width = 5, height = 16)
+
+Time_diff_genes <- top_n(Time_diff, n = 10, desc(qval)) %>% pull(gene_short_name)
+p1 <- plot_genes_in_pseudotime(cds[Time_diff_genes,], ncol=5, color_by = 'State')+ scale_color_manual(values = mycolor2) 
+ggsave("sce_Time_diff_genes.pdf", p1, width = 12.5, height = 3)
+
+p$tree_row
+clusters <- cutree(p$tree_row, k = 4)
+clustering <- data.frame(clusters)
+clustering[,1] <- as.character(clustering[,1])
+colnames(clustering) <- "Gene_Clusters"
+table(clustering)
+clustering$gene_short_name <- rownames(clustering)
+write.csv(clustering, "Time_clustering_all.csv", row.names = F)
+Time_diff_cluster <- merge(Time_diff, clustering, by = 'gene_short_name')
+write.csv(Time_diff_cluster, "sce_Time_diff_cluster.csv", row.names = F)
+
+
+
+#pseudotime branch analysis
+plot_cell_trajectory(cds, color_by = 'State') 
+#branch1
+BEAM_res <- BEAM(cds[ordergene,], branch_point = 1, progenitor_method = 'duplicate')
+BEAM_res <- BEAM_res[order(BEAM_res$qval),]
+BEAM_res <- BEAM_res[, c('gene_short_name', 'pval', 'qval')]
+head(BEAM_res)
+write.csv(BEAM_res, 'sce_BEAM_res_branch1.csv', row.names =F)
+#BEAM_res <- read.csv("E:/Work01/HMI/Trajectory_new/wf/sce_BEAM_res_branch1.csv")
+
+ BEAM_genes <- top_n(BEAM_res, n = 50, desc(qval)) %>% pull(gene_short_name)
+p <- plot_genes_branched_heatmap(cds[BEAM_genes,], 
+                                                       branch_point = 1,
+                                                       num_clusters=3, 
+                                                       show_rownames=T, return_heatmap=T)
+ggsave("sce_BEAM_heatmap_b1_top50.pdf", p$ph_res, width = 6.5, height = 6)
+
+BEAM_genes <- top_n(BEAM_res, n = 10, desc(qval)) %>% pull(gene_short_name) 
+p <- plot_genes_branched_pseudotime(cds[BEAM_genes,],
+ branch_point = 1,
+ color_by = "State",
+ ncol = 4)+ scale_color_manual(values = mycolor2) +ggtitle('Top 10 pseudotime branch point 1 significant dependent genes')
+ggsave("sce_BEAM_b1_top10.pdf",   width = 10, height = 6)
+
+
+#branch2
+BEAM_res <- BEAM(cds[ordergene,], branch_point = 2, progenitor_method = 'duplicate')
+BEAM_res <- BEAM_res[order(BEAM_res$qval),]
+BEAM_res <- BEAM_res[, c('gene_short_name', 'pval', 'qval')]
+head(BEAM_res)
+write.csv(BEAM_res, 'sce_BEAM_res_branch2.csv', row.names =F)
+#BEAM_res <- read.csv("E:/Work01/HMI/Trajectory_new/wf/sce_BEAM_res_branch2.csv")
+  
+BEAM_genes <- top_n(BEAM_res, n = 50, desc(qval)) %>% pull(gene_short_name)
+p <- plot_genes_branched_heatmap(cds[BEAM_genes,], 
+                                                       branch_point = 2,
+                                                       num_clusters=3, 
+                                                       show_rownames=T, return_heatmap=T)
+ggsave("sce_BEAM_heatmap_b2_top50.pdf", p$ph_res, width = 6.5, height = 6)
+
+BEAM_genes <- top_n(BEAM_res, n = 10, desc(qval)) %>% pull(gene_short_name) 
+p <- plot_genes_branched_pseudotime(cds[BEAM_genes,],
+ branch_point = 2,
+ color_by = "State",
+ ncol = 4)+ scale_color_manual(values = mycolor2) +ggtitle('Top 10 pseudotime branch point 2 significant dependent genes')
+ggsave("sce_BEAM_b2_top10.pdf",   width = 10, height = 6)
+
+
+#branch3
+BEAM_res <- BEAM(cds[ordergene,], branch_point = 3, progenitor_method = 'duplicate')
+BEAM_res <- BEAM_res[order(BEAM_res$qval),]
+BEAM_res <- BEAM_res[, c('gene_short_name', 'pval', 'qval')]
+head(BEAM_res)
+write.csv(BEAM_res, 'sce_BEAM_res_branch3.csv', row.names =F)
+#BEAM_res <- read.csv("E:/Work01/HMI/Trajectory_new/wf/sce_BEAM_res_branch3.csv")
+
+BEAM_genes <- top_n(BEAM_res, n = 50, desc(qval)) %>% pull(gene_short_name)
+p <- plot_genes_branched_heatmap(cds[BEAM_genes,], 
+                                                       branch_point = 3,
+                                                       num_clusters=3, 
+                                                       show_rownames=T, return_heatmap=T)
+ggsave("sce_BEAM_heatmap_b3_top50.pdf", p$ph_res, width = 6.5, height = 6)
+
+BEAM_genes <- top_n(BEAM_res, n = 10, desc(qval)) %>% pull(gene_short_name) 
+p <- plot_genes_branched_pseudotime(cds[BEAM_genes,],
+ branch_point = 3,
+ color_by = "State",
+ ncol = 4)+ scale_color_manual(values = mycolor2) +ggtitle('Top 10 pseudotime branch point 3 significant dependent genes')
+ggsave("sce_BEAM_b3_top10.pdf",   width = 10, height = 6)
+
+ 
+
+
+#Supplemental Figure 1 
+setwd("E:/Work01/HMI/Trajectory_new/wk/")
+sce <- readRDS("E:/Work01/HMI/Trajectory_new/wk/sma_wk.RDS")
+Idents(sce) <- sce@meta.data$cell_state
+sce_marker <- FindAllMarkers(sce, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+sce_marker <- subset(sce_marker, avg_log2FC <= -1 | avg_log2FC >= 1)
+sce_marker <- subset(sce_marker, p_val <= 0.05)
+sce_marker %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) ->sce_marker_top5
+gene.state <- sce_marker_top5$gene
+p1 <- DotPlot(sce, features = gene.state ) + coord_flip()+ RotatedAxis()+ ggtitle('WT1+/KDR+ Cells')
+ggsave("sce_wk_dot_state.pdf",p1, width = 4,height = 5)
+
+sce_marker %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) ->sce_marker_top10
+gene.state <- sce_marker_top10$gene
+p1 <-  DoHeatmap(sce, features = gene.state) #+ NoLegend()
+ggsave(p1,file="sce_wk_state_heat.pdf",width = 7.5, height = 4.8)
+
+setwd("E:/Work01/HMI/Trajectory_new/wf/")
+sce <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sma_wf.RDS")
+Idents(sce) <- sce@meta.data$cell_state
+sce_marker <- FindAllMarkers(sce, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+sce_marker <- subset(sce_marker, avg_log2FC <= -1 | avg_log2FC >= 1)
+sce_marker <- subset(sce_marker, p_val <= 0.05)
+sce_marker %>%
+    group_by(cluster) %>%
+    top_n(n = 5, wt = avg_log2FC) ->sce_marker_top5
+gene.state <- sce_marker_top5$gene
+p1 <- DotPlot(sce, features = gene.state ) + coord_flip()+ RotatedAxis()+ ggtitle('WT1+/FLT1+ Cells')
+p1
+ggsave("sce_wf_dot_state.pdf",p1, width = 5,height = 6)
+
+sce_marker %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) ->sce_marker_top10
+gene.state <- sce_marker_top10$gene
+p1 <-  DoHeatmap(sce, features = gene.state) #+ NoLegend()
+ggsave(p1,file="sce_wf_state_heat.pdf",width = 12.5, height = 8)
