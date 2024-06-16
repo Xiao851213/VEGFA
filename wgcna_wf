@@ -1,0 +1,380 @@
+
+library(WGCNA)
+library(hdWGCNA) 
+options(Seurat.object.assay.version = "v3")
+
+setwd("E:/Work01/HMI/Trajectory_new/wf/")
+#sce <- readRDS("E:/Work01/HMI/Trajectory_new/wf/sce.RDS")
+seurat_obj <- readRDS("E:/Work01/HMI/Trajectory_new/wf/hMI_wf_hdWGCNA_object.RDS")
+
+seurat_obj <- sce
+#set up the Seurat object
+seurat_obj <- SetupForWGCNA(
+  seurat_obj,
+  gene_select = "fraction", # the gene selection approach
+  fraction = 0.05, # fraction of cells that a gene needs to be expressed in order to be iAdipluded
+  wgcna_name = "hMI_wf" # the name of the hdWGCNA experiment
+)
+
+# construct metacells  in each group
+seurat_obj <- MetacellsByGroups(
+  seurat_obj = seurat_obj,
+  group.by = c("suspension_type"), # specify the columns in seurat_obj@meta.data to group by #"sample", 
+  reduction = 'harmony', # select the dimensionality reduction to perform KNN on
+  k = 25, # nearest-neighbors parameter
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = 'suspension_type' # set the Idents of the metacell seurat object
+)
+# normalize metacell expression matrix:
+seurat_obj <- NormalizeMetacells(seurat_obj)
+
+seurat_obj <- SetDatExpr(
+  seurat_obj,
+  assay = 'RNA', # using RNA assay
+  slot = 'data' # using normalized data
+)
+
+# Test different soft powers:
+seurat_obj <- TestSoftPowers(
+  seurat_obj,
+  networkType = 'signed' # you can also use "unsigned" or "signed hybrid"
+)
+# plot the results:
+plot_list <- PlotSoftPowers(seurat_obj)
+# assemble with patchwork
+p1 <- wrap_plots(plot_list, Adipol=2)
+ggsave(p1,file="hMI_wf_hdwgcna_spt.pdf",width = 10, height = 8)
+p1
+
+# construct co-expression network:
+seurat_obj <- ConstructNetwork(
+  seurat_obj, soft_power=7,
+  setDatExpr=FALSE,
+  overwrite_tom = TRUE,
+  tom_name = 'hMI_wf' # name of the topoligical overlap matrix written to disk
+)
+
+#PlotDendrogram(seurat_obj, main='hMI_wf_hdWGCNA_Dendrogram')
+
+TOM <- GetTOM(seurat_obj)
+
+# Module Eigengenes and Connectivity
+# need to run ScaleData first or else harmony throws an error:
+seurat_obj <- ScaleData(seurat_obj, features=VariableFeatures(seurat_obj))
+# compute all MEs in the full single-cell dataset
+seurat_obj <- ModuleEigengenes(
+ seurat_obj,
+ group.by.vars="sample"
+)
+# harmonized module eigengenes:
+hMEs <- GetMEs(seurat_obj)
+# module eigengenes:
+MEs <- GetMEs(seurat_obj, harmonized=FALSE)
+
+# compute eigengene-based connectivity (kME):
+seurat_obj <- ModuleConnectivity(
+  seurat_obj
+)
+# rename the modules
+seurat_obj <- ResetModuleNames(
+  seurat_obj,
+  new_name = "hMI_wf-M"
+)
+# plot genes ranked by kME for each module
+p <- PlotKMEs(seurat_obj, ncol=4)
+p
+# get the module assignment table:
+modules <- GetModules(seurat_obj)
+# show the first 6 columns:
+head(modules[,1:6])
+# get hub genes
+hub_df <- GetHubGenes(seurat_obj, n_hubs = 10)
+head(hub_df)
+
+
+#BiocManager::install('MetBrewer')
+library(MetBrewer)
+display_all()
+new_colors <- paste0(met.brewer("Redon", n=13, type='continuous'))
+new_colors <- paste0(met.brewer("Redon", n=10))
+new_colors1 <- paste0(met.brewer("Austria"))
+new_colors2 <- paste0(met.brewer("Egypt"))
+new_colors0 <- paste0(met.brewer("Java"))
+new_colors3 <- c(new_colors1, new_colors2,new_colors0)
+new_colors3 <- mycolor[c(1:6)]
+seurat_obj <- ResetModuleColors(seurat_obj, new_colors3)
+saveRDS(seurat_obj, file='hMI_wf_hdWGCNA_object.rds')
+#seurat_obj <- readRDS("E:/Work01/HMI/Trajectory_new/wf/hMI_wf_hdWGCNA_object.RDS")
+
+PlotDendrogram(seurat_obj, main='hMI_wf_hdWGCNA_Dendrogram')
+# hMI_wf_hdwgcna_dendrogram
+
+# plot genes ranked by kME for each module
+p <- PlotKMEs(seurat_obj, ncol=3)
+p
+ggsave(p,file="hMI_wf_hdwgcna_gene.pdf",width = 7.5, height = 4)
+
+
+# make a featureplot of hMEs for each module
+plot_list <- ModuleFeaturePlot(
+  seurat_obj,
+  features='hMEs', # plot the hMEs
+  order=TRUE # order so the points with highest hMEs are on top
+)
+# stitch together with patchwork
+p1 <- wrap_plots(plot_list, ncol=3)
+ggsave(p1,file="hMI_wf_hdwgcna_feature.pdf",width =7.5, height = 4)
+
+
+# make a featureplot of hMEs for each module
+plot_list <- ModuleFeaturePlot(
+  seurat_obj,
+  module_names = c('hMI_wf-M1', 'hMI_wf-M4'),
+  features='hMEs', # plot the hMEs
+  order=TRUE # order so the points with highest hMEs are on top
+)
+# stitch together with patchwork
+p1 <- wrap_plots(plot_list, ncol=1)
+ggsave(p1,file="hMI_wf_hdwgcna_feature_trajectory.pdf",width =2.5, height = 4)
+
+
+# get hMEs from seurat object
+MEs <- GetMEs(seurat_obj, harmonized=TRUE)
+mods <- colnames(MEs); mods <- mods[mods != 'grey']
+
+# add hMEs to Seurat meta-data:
+seurat_obj@meta.data <- cbind(seurat_obj@meta.data, MEs)
+
+# plot with Seurat's DotPlot fuAdiption
+p <- DotPlot(seurat_obj, features=mods, group.by = 'Pseudotime_state')
+# flip the x/y axes, rotate the axis labels, and change color scheme:
+p1 <- p +
+  #coord_flip() +
+  RotatedAxis() +
+  scale_color_gradient2(high='red', mid='grey95', low='blue')
+# plot output
+p1
+ggsave(p1,file="hMI_wf_hdwgcna_dot_Pseudotime_state.pdf",width =7.5, height = 4)
+
+# plot with Seurat's DotPlot fuAdiption
+p <- DotPlot(seurat_obj, features=mods, group.by = 'cell_type_original')
+# flip the x/y axes, rotate the axis labels, and change color scheme:
+p1 <- p +
+ coord_flip() +
+  RotatedAxis() +
+  scale_color_gradient2(high='red', mid='grey95', low='blue')
+# plot output
+p1
+ggsave(p1,file="hMI_wf_hdwgcna_dot_cell_type_original.pdf",width = 7.5, height = 4)
+
+
+#Enrichment analysis
+library(enrichR)
+library(GeneOverlap)
+# enrichr databases to test
+dbs <- c('GO_Biological_Process_2021','GO_Cellular_Component_2021','GO_Molecular_Function_2021')
+# perform enrichment tests
+seurat_obj <- RunEnrichr(
+  seurat_obj,
+  dbs=dbs, # character vector of enrichr databases to test
+  max_genes = 100 # number of genes per module to test
+)
+# retrieve the output table
+enrich_df <- GetEnrichrTable(seurat_obj)
+saveRDS(seurat_obj, file='hMI_wf_hdWGCNA_object.rds')
+
+# make GO term plots:
+EnrichrBarPlot(
+  seurat_obj,
+  outdir = "enrichr_plots", # name of output directory
+  n_terms = 10, # number of enriched terms to show (sometimes more show if there are ties!!!)
+  plot_size = c(5,6), # width, height of the output .pdfs
+  logscale=TRUE # do you want to show the enrichment as a log scale?
+)
+
+# enrichr dotplot
+p1 <- EnrichrDotPlot(
+  seurat_obj,
+  mods = "all", # use all modules (this is the default behavior)
+  database = "GO_Biological_Process_2021", # this has to be one of the lists we used above!!!
+  n_terms=1 # number of terms for each module
+) 
+ggsave(p1,file="hMI_wf_hdwgcna_gobp.pdf",width = 7.5, height = 4)
+p1 <- EnrichrDotPlot(
+  seurat_obj,
+  mods = "all", # use all modules (this is the default behavior)
+  database = "GO_Cellular_Component_2021", # this has to be one of the lists we used above!!!
+  n_terms=1 # number of terms for each module
+) 
+ggsave(p1,file="hMI_wf_hdwgcna_gocc.pdf",width = 7.5, height = 4)
+p1 <- EnrichrDotPlot(
+  seurat_obj,
+  mods = "all", # use all modules (this is the default behavior)
+  database = "GO_Molecular_Function_2021", # this has to be one of the lists we used above!!!
+  n_terms=1 # number of terms for each module
+) 
+ggsave(p1,file="hMI_wf_hdwgcna_gomf.pdf",width = 7.5, height = 4)
+
+
+#Marker gene overlap analysis
+# compute cell-type marker genes with Seurat:
+Idents(seurat_obj) <- seurat_obj@meta.data$Pseudotime_state
+my_levels <- c( 'Pstate1', 'Pstate2', 'Pstate3', 'Pstate4', "Pstate5", "Pstate6", "Pstate7", "Ptate8", "Pstate9")
+Idents(seurat_obj) <- factor(Idents(seurat_obj), levels = my_levels)
+
+markers <- Seurat::FindAllMarkers(
+  seurat_obj,
+  only.pos = TRUE,
+  logfc.threshold=1
+)
+# compute marker gene overlaps
+overlap_df <- OverlapModulesDEGs(
+  seurat_obj,
+  deg_df = markers,
+  fc_cutoff = 1 # log fold change cutoff for overlap analysis
+)
+
+# overlap barplot, produces a plot for each cell type
+plot_list <- OverlapBarPlot(overlap_df)
+# stitch plots with patchwork
+p1 <- wrap_plots(plot_list, ncol=3)
+p1
+ggsave(p1,file="hMI_wf_hdwgcna_overlap_bar.pdf",width = 7.5, height = 4)
+# plot odds ratio of the overlap as a dot plot
+p1 <- OverlapDotPlot(
+  overlap_df,
+  plot_var = 'odds_ratio') +
+  coord_flip() +
+  ggtitle('Overlap of modules & cell-type markers')
+ggsave(p1,file="hMI_wf_hdwgcna_overlap_dot.pdf",width = 7.5, height = 3)
+
+
+#Network Visualization
+library(igraph)
+ModuleNetworkPlot(seurat_obj)
+
+#Applying UMAP to co-expression networks
+seurat_obj <- RunModuleUMAP(
+  seurat_obj,
+  n_hubs = 10, # number of hub genes to iAdiplude for the UMAP embedding
+  n_neighbors=15, # neighbors parameter for UMAP
+  min_dist=0.1 # min distaAdipe between points in UMAP space
+)
+# get the hub gene UMAP table from the seurat object
+umap_df <- GetModuleUMAP(seurat_obj)
+
+
+# plot with ggplot
+p <- ggplot(umap_df, aes(x=UMAP1, y=UMAP2)) +
+  geom_point(
+   color=umap_df$color,
+   size=umap_df$kME*2
+  ) +
+  umap_theme()
+
+pdf(paste0( 'hMI_wf_hubgene_umap_ggplot_uns.pdf'), width=5, height=5)
+p
+dev.off()
+
+
+# plot with ggplot
+plot_df <- umap_df
+
+# compute coordinates for cluster labels
+centroid_df <- data.frame()
+for(cur_cluster in unique(plot_df[['module']])){
+  cur_meta <- plot_df[plot_df[['module']] == cur_cluster,]
+  df <- data.frame(
+    cluster = cur_cluster,
+    UMAP1 = mean(cur_meta$UMAP1),
+    UMAP2 = mean(cur_meta$UMAP2)
+  )
+  centroid_df <- rbind(centroid_df, df)
+}
+
+# add annotation
+hub_genes <- GetHubGenes(seurat_obj, 3)
+anno_genes <- hub_genes$gene_name
+plot_df$anno <- ifelse(plot_df$gene %in% anno_genes, umap_df$gene, '')
+
+plot_df_anno <- subset(plot_df, anno != '')
+p <-  plot_df %>%
+  ggplot(aes(x=UMAP1, y=UMAP2, color=module)) +
+  ggrastr::rasterise(
+    geom_point(
+      inherit.aes=FALSE,
+      data=plot_df,
+      aes(x=UMAP1, y=UMAP2, color=module),
+      color=plot_df$color,
+      size=plot_df$kME,
+    ), dpi=800, dpi_scale=0.5) +
+  geom_point(
+    inherit.aes = FALSE,
+    data = plot_df_anno,
+    shape=21, color='black',
+    fill=plot_df_anno$color,
+    size=plot_df_anno$kME,
+    aes(x=UMAP1, y=UMAP2, fill=module)
+  ) +
+  # add labels
+  ggrepel::geom_text_repel(data = centroid_df, label=centroid_df$cluster, color='black', max.overlaps=Inf, size=3, fontface='bold') +
+  geom_text_repel(label=plot_df$anno, max.overlaps=Inf, color='black', fontface='italic', size=2) +
+  umap_theme() + NoLegend() +
+  coord_equal() +
+  theme(
+    plot.margin = margin(0,0,0,0)
+  )
+
+  pdf(paste0('hMI_wf_hubgene_umap_ggplot.pdf'), width=5, height=5)
+  print(p)
+  dev.off()
+
+library(reshape2)
+library(igraph)
+pdf(paste0('hMI_wf_hubgene_umap_igraph.pdf'), width=10, height=10)
+ModuleUMAPPlot(
+  seurat_obj,
+  edge.alpha=0.5,
+  sample_edges=TRUE,
+  keep_grey_edges=FALSE,
+  edge_prop=0.075,
+  label_hubs=3
+)
+dev.off()
+
+saveRDS(seurat_obj, file='hMI_wf_hdWGCNA_object.rds')
+
+
+
+modules <- GetModules(seurat_obj)
+write.csv(modules, "sce_wf_modules.csv", row.names = F)
+
+M1 <- subset(modules, modules$module == 'hMI_wf-M1')
+M4 <- subset(modules, modules$module == 'hMI_wf-M4')
+
+
+KEGG_database <- 'hsa'
+SYMBOL <- M1$gene_name
+#SYMBOL <- M4$gene_name 
+gene.df <- bitr(SYMBOL, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+gene <- gene.df$ENTREZID
+GO <- enrichGO(gene = gene,#       涨    
+                   OrgDb=org.Hs.eg.db,
+                   keyType = "ENTREZID",
+                   ont = "BP",#      GO    
+                   pAdjustMethod = "BH",#      ùܣ һ 㶼 õ BH
+                   minGSSize = 1,
+                   pvalueCutoff = 0.01,#Pֵ    ȡ0.05
+                   qvalueCutoff = 0.05,
+                   readable = TRUE)                 
+GO_dot <- dotplot(GO, label_format=40)
+P1 <- GO_dot + ggtitle('Top 10 enriched biological process iterms')
+KEGG<-enrichKEGG(gene,#KEGG        
+                 keyType = 'kegg',
+                 organism = KEGG_database,
+                 pvalueCutoff = 0.05,
+                 qvalueCutoff = 0.05)
+KEGG_dot <- dotplot(KEGG,  label_format=40)
+P2 <- KEGG_dot + ggtitle('Top 10 enriched KEGG pathways')
+ggsave(P1,file="sce_wf_M1_GO.pdf",width = 7.5, height = 4) 
+ggsave(P2,file="sce_wf_M1_KEGG.pdf",width = 7.5, height = 4) 
